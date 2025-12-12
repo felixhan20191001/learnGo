@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡️ 勇士抽奖系统 ⚡️</title>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <style>
+        :root {
+            --primary: #00fff2;
+            --secondary: #ff00de;
+            --bg-dark-overlay: rgba(15, 15, 26, 0.25); /* 背景叠加层颜色 */
+            --panel-bg: rgba(26, 26, 46, 0.9); /* 面板背景色，增加透明度 */
+        }
+
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            /* 设置背景图片，并叠加一层深色蒙版以提高文字可读性 */
+            background: linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)), url('image_0.jpg');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-attachment: fixed; /* 背景固定，不随滚动条滚动 */
+            color: white;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        /* --- 左侧头像样式 --- */
+        .avatar-left {
+            position: fixed; /* 固定定位 */
+            top: 30px;
+            left: 30px;
+            width: 150px;
+            height: auto;
+            border-radius: 50%; /* 圆形 */
+            border: 3px solid var(--primary); /* 赛博朋克风格边框 */
+            box-shadow: 0 0 30px rgba(0, 255, 242, 0.5); /* 发光效果 */
+            z-index: 100; /* 确保在最上层 */
+            transition: transform 0.3s;
+        }
+
+        .avatar-left:hover {
+            transform: scale(1.05) rotate(-5deg);
+        }
+
+        /* 在小屏幕上缩小头像 */
+        @media (max-width: 768px) {
+            .avatar-left {
+                width: 80px;
+                top: 15px;
+                left: 15px;
+                border-width: 2px;
+            }
+        }
+
+        /* --- 抽奖显示区 --- */
+        .draw-section {
+            padding: 50px 0;
+            text-align: center;
+            width: 100%;
+            /* 修改为半透明背景，让底部图片透出来 */
+            background: var(--bg-dark-overlay);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.5);
+            /* 增加顶部内边距，防止在大屏幕下被头像遮挡标题 */
+            padding-top: 80px;
+        }
+
+        h1 {
+            font-size: 3.5rem;
+            margin: 0 0 30px 0;
+            letter-spacing: 5px;
+            background: linear-gradient(to right, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            text-shadow: 0 0 20px rgba(0, 255, 242, 0.3);
+        }
+
+        .btn-draw {
+            background: linear-gradient(135deg, var(--secondary), #9900ff);
+            color: white;
+            border: none;
+            padding: 15px 50px;
+            font-size: 1.5rem;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 0 25px rgba(255, 0, 222, 0.4);
+            transition: transform 0.2s, box-shadow 0.2s;
+            font-weight: bold;
+            margin-bottom: 30px;
+        }
+
+        .btn-draw:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 40px rgba(255, 0, 222, 0.7);
+        }
+
+        .btn-draw:disabled {
+            filter: grayscale(1);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .stage {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            perspective: 1000px;
+        }
+
+        .card {
+            width: 220px;
+            height: 220px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid #444;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.2rem;
+            font-weight: bold;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+            transition: all 0.3s;
+            overflow: hidden;
+            backdrop-filter: blur(5px); /* 卡片毛玻璃效果 */
+        }
+
+        .card.active {
+            border-color: var(--primary);
+            background: rgba(0, 255, 242, 0.15);
+            box-shadow: 0 0 50px var(--primary);
+            animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        /* 结果文案 */
+        .congrats-text {
+            font-size: 2.5rem;
+            font-weight: 900;
+            color: #ffd700; /* 金色 */
+            margin-top: 40px;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.5s ease-out;
+            text-shadow: 0 0 15px rgba(255, 215, 0, 0.8);
+        }
+
+        .congrats-text.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* --- 管理控制区 --- */
+        .manage-section {
+            width: 90%;
+            max-width: 800px;
+            background: var(--panel-bg); /* 使用半透明背景 */
+            margin: 50px 0;
+            border-radius: 15px;
+            padding: 30px;
+            border: 1px solid rgba(0, 255, 242, 0.2);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+            backdrop-filter: blur(10px); /* 背景毛玻璃效果 */
+        }
+
+        .manage-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 20px;
+            margin-bottom: 20px;
+        }
+
+        .input-group input {
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #444;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            outline: none;
+            font-size: 1rem;
+            transition: border-color 0.3s;
+        }
+
+        .input-group input:focus {
+            border-color: var(--primary);
+        }
+
+        .btn-add {
+            padding: 12px 25px;
+            background: var(--primary);
+            color: #000;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-left: 15px;
+            transition: all 0.2s;
+            font-size: 1rem;
+        }
+
+        .btn-add:hover {
+            background: #00e0d6;
+            box-shadow: 0 0 15px var(--primary);
+        }
+
+        .name-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            padding-right: 5px;
+        }
+
+        /* 自定义滚动条样式 */
+        .name-list::-webkit-scrollbar {
+            width: 8px;
+        }
+        .name-list::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 4px;
+        }
+        .name-list::-webkit-scrollbar-thumb:hover {
+            background: var(--primary);
+        }
+
+        .name-tag {
+            background: rgba(45, 45, 68, 0.8);
+            padding: 10px 18px;
+            border-radius: 25px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.2s;
+            font-size: 1.1rem;
+        }
+
+        .name-tag:hover {
+            background: rgba(61, 61, 92, 0.9);
+            border-color: var(--primary);
+            box-shadow: 0 0 10px rgba(0, 255, 242, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .delete-btn {
+            color: #ff6b6b;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 1.3rem;
+            line-height: 1;
+            transition: color 0.2s;
+        }
+        .delete-btn:hover {
+            color: #ff0000;
+            text-shadow: 0 0 5px red;
+        }
+
+        @keyframes popIn {
+            0% { transform: scale(0.8); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        /* 针对小屏幕的额外调整 */
+        @media (max-width: 600px) {
+            h1 { font-size: 2.5rem; }
+            .stage { gap: 15px; }
+            .card { width: 160px; height: 160px; font-size: 1.8rem; }
+            .draw-section { padding-top: 60px; }
+            .manage-header { flex-direction: column; gap: 15px; align-items: flex-start; }
+            .input-group { width: 100%; display: flex; }
+            .input-group input { flex-grow: 1; }
+        }
+    </style>
+</head>
+<body>
+
+<img src="image_1.jpg" alt="全村的希望" class="avatar-left">
+
+<div class="draw-section">
+    <h1>🎲 勇士抽奖系统 🎲</h1>
+
+    <button class="btn-draw" id="startBtn" onclick="startLottery()">开启命运轮盘</button>
+
+    <div class="stage">
+        <div class="card" id="card1"><span>?</span></div>
+        <div class="card" id="card2"><span>?</span></div>
+    </div>
+
+    <div id="finalText" class="congrats-text">🎉 恭喜两位勇士！ 🎉</div>
+</div>
+
+<div class="manage-section">
+    <div class="manage-header">
+        <h3>👥 候选人名单 (<span id="count">0</span>人)</h3>
+        <div class="input-group">
+            <input type="text" id="newName" placeholder="输入姓名..." onkeypress="if(event.keyCode==13) addName()">
+            <button class="btn-add" onclick="addName()">新增</button>
+        </div>
+    </div>
+    <div class="name-list" id="nameListContainer">
+    </div>
+</div>
+
+<script>
+    // --- 前端逻辑保持不变 ---
+    let isRolling = false;
+    let candidateList = [];
+
+    window.onload = function() {
+        refreshList();
+    };
+
+    async function refreshList() {
+        try {
+            const res = await fetch('/api/list');
+            const data = await res.json();
+            if (data.success) {
+                candidateList = data.names || [];
+                renderList(candidateList);
+            }
+        } catch (e) {
+            console.error("加载名单失败", e);
+        }
+    }
+
+    function renderList(names) {
+        const container = document.getElementById('nameListContainer');
+        document.getElementById('count').innerText = names.length;
+        container.innerHTML = '';
+
+        names.forEach(name => {
+            const tag = document.createElement('div');
+            tag.className = 'name-tag';
+            tag.innerHTML = `
+                    ${name}
+                    <span class="delete-btn" onclick="deleteName('${name}')" title="删除">&times;</span>
+                `;
+            container.appendChild(tag);
+        });
+    }
+
+    async function addName() {
+        const input = document.getElementById('newName');
+        const name = input.value.trim();
+        if (!name) return;
+
+        const res = await fetch('/api/add', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ name: name })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            input.value = '';
+            candidateList = data.names;
+            renderList(candidateList);
+        } else {
+            alert(data.msg);
+        }
+    }
+
+    async function deleteName(name) {
+        if (!confirm(`确定要从名单中移除 "${name}" 吗？`)) return;
+
+        const res = await fetch('/api/del', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ name: name })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            candidateList = data.names;
+            renderList(candidateList);
+        }
+    }
+
+    async function startLottery() {
+        if (isRolling) return;
+
+        if (candidateList.length < 2) {
+            alert("名单不足 2 人，请先在下方添加人员！");
+            return;
+        }
+
+        const finalText = document.getElementById('finalText');
+        finalText.classList.remove('show');
+
+        const card1 = document.getElementById('card1');
+        const card2 = document.getElementById('card2');
+        card1.classList.remove('active');
+        card2.classList.remove('active');
+
+        const res = await fetch('/api/draw');
+        const data = await res.json();
+
+        if (data.error) {
+            alert(data.error);
+            return;
+        }
+
+        isRolling = true;
+        document.getElementById('startBtn').disabled = true;
+
+        const span1 = card1.querySelector('span');
+        const span2 = card2.querySelector('span');
+
+        let rollTimer = setInterval(() => {
+            const r1 = Math.floor(Math.random() * candidateList.length);
+            const r2 = Math.floor(Math.random() * candidateList.length);
+            span1.innerText = candidateList[r1];
+            span2.innerText = candidateList[r2];
+        }, 60);
+
+        setTimeout(() => {
+            clearInterval(rollTimer);
+
+            span1.innerText = data.winners[0];
+            span2.innerText = data.winners[1];
+
+            card1.classList.add('active');
+            card2.classList.add('active');
+            finalText.classList.add('show');
+            fireConfetti();
+
+            isRolling = false;
+            document.getElementById('startBtn').disabled = false;
+        }, 3000);
+    }
+
+    function fireConfetti() {
+        var count = 300;
+        var defaults = { origin: { y: 0.6 } };
+        function fire(particleRatio, opts) {
+            confetti(Object.assign({}, defaults, opts, {
+                particleCount: Math.floor(count * particleRatio)
+            }));
+        }
+        fire(0.25, { spread: 26, startVelocity: 55 });
+        fire(0.2, { spread: 60 });
+        fire(0.35, { spread: 100, decay: 0.91, scalar: 0.8 });
+        fire(0.1, { spread: 120, startVelocity: 25, decay: 0.92, scalar: 1.2 });
+        fire(0.1, { spread: 120, startVelocity: 45 });
+    }
+</script>
+</body>
+</html>

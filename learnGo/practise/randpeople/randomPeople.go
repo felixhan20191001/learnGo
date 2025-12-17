@@ -1,10 +1,12 @@
-package randpeople
+package main
 
 import (
 	"bufio"         // 用于按行读取文件
+	"crypto/rand"   // 注意：这里改用了 crypto/rand
 	"encoding/json" // 用于处理 JSON 数据（前后端通信）
 	"fmt"           // 用于打印日志到控制台
 	"log"
+	"math/big" // 用于生成随机数
 	"net/http" // 用于搭建 Web 服务器
 	"os"       // 用于操作操作系统文件（打开、检查文件）
 	"strings"  // 用于处理字符串（去空格、拼接）
@@ -20,6 +22,23 @@ var mu sync.Mutex
 
 // dbFile 是我们要存储名字的文件名
 const dbFile = "names.txt"
+
+// 初始化候选人名单
+var defaultNames = []string{
+	"齐弘宇",
+	"齐宝树",
+	"江龙",
+	"李雪",
+	"刘晓茜",
+	"周成山",
+	"刘先觉",
+	"李岷轩",
+	"温嘉鑫",
+	"李亚洲",
+	"张钦",
+	"孟辰",
+	"李亚东",
+}
 
 // --- 数据结构定义 (Model) ---
 
@@ -52,37 +71,42 @@ type ActionRequest struct {
 
 // --- 主程序入口 ---
 
-//func main() {
-//	// 1. 初始化随机数种子
-//	// 如果不加这行，每次重启程序，抽出来的随机结果可能是一样的
-//	rand.Seed(time.Now().UnixNano())
-//
-//	// 2. 静态资源服务
-//	// 告诉 Go：如果用户访问的是普通网址（不是/api开头的），就去当前文件夹找文件（比如 index11.html）给用户看,默认先寻找目录下的index.html文件返回
-//	http.Handle("/", http.FileServer(http.Dir("./")))
-//
-//	// 3. 注册 API 路由
-//	// 告诉 Go：当用户访问特定网址时，运行哪个函数
-//	http.HandleFunc("/api/list", listHandler)  // 获取所有名单
-//	http.HandleFunc("/api/add", addHandler)    // 新增一个名字
-//	http.HandleFunc("/api/del", deleteHandler) // 删除一个名字
-//	http.HandleFunc("/api/draw", drawHandler)  // 开始抽奖
-//
-//	// 4. 打印启动日志
-//	fmt.Println("🚀 抽奖系统后端已启动！")
-//	fmt.Println("📂 数据存储文件:", dbFile)
-//	fmt.Println("👉 请在浏览器访问: http://localhost:8080")
-//
-//	// 5. 启动前检查文件
-//	// 如果 names.txt 不存在，先创建一个空的，防止后面报错
-//	checkFile()
-//
-//	// 6. 启动 Web 服务器，监听 8080 端口
-//	// 这一行代码会一直运行，直到你强制关闭程序
-//	if err := http.ListenAndServe(":8080", nil); err != nil {
-//		fmt.Printf("启动失败: %v\n", err)
-//	}
-//}
+func main() {
+	// 1. 初始化随机数种子
+	// 如果不加这行，每次重启程序，抽出来的随机结果可能是一样的
+	//rand.Seed(time.Now().UnixNano())
+
+	// 2. 静态资源服务
+	// 告诉 Go：如果用户访问的是普通网址（不是/api开头的），就去当前文件夹找文件（比如 index11.html）给用户看,默认先寻找目录下的index.html文件返回
+	http.Handle("/", http.FileServer(http.Dir("./")))
+
+	// 3. 注册 API 路由
+	// 告诉 Go：当用户访问特定网址时，运行哪个函数
+	http.HandleFunc("/api/list", listHandler)  // 获取所有名单
+	http.HandleFunc("/api/add", addHandler)    // 新增一个名字
+	http.HandleFunc("/api/del", deleteHandler) // 删除一个名字
+	http.HandleFunc("/api/draw", drawHandler)  // 开始抽奖
+
+	// 4. 打印启动日志
+	fmt.Println("🚀 抽奖系统后端已启动！")
+	fmt.Println("📂 数据存储文件:", dbFile)
+	fmt.Println("👉 请在浏览器访问: http://localhost:8181")
+
+	// 5. 启动前检查文件
+	// 如果 names.txt 不存在，先创建一个空的，防止后面报错
+	//checkFile()
+
+	//初始化名单每次写入文件
+	if err := initData(); err != nil {
+		fmt.Printf("数据初始化失败，%v\n", err)
+		return
+	}
+	// 6. 启动 Web 服务器，监听 8080 端口
+	// 这一行代码会一直运行，直到你强制关闭程序
+	if err := http.ListenAndServe(":8181", nil); err != nil {
+		fmt.Printf("启动失败: %v\n", err)
+	}
+}
 
 // --- 核心工具函数 (Helper Functions) ---
 
@@ -101,6 +125,12 @@ func checkFile() {
 		_, err := os.Create(dbFile)
 		checkErr(err)
 	}
+}
+
+// // 【新增/修改】初始化数据函数
+// // 每次启动时，都把 defaultNames 写入文件，覆盖之前的旧数据
+func initData() error {
+	return writeNamesToFile(defaultNames)
 }
 
 // readNamesFromFile 从 txt 文件中读取所有名字
@@ -247,32 +277,58 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(Response{Success: true, Names: newNames})
 }
 
-// drawHandler: 抽奖逻辑
-//func drawHandler(w http.ResponseWriter, r *http.Request) {
-//	// 上锁
-//	mu.Lock()
-//	defer mu.Unlock()
-//
-//	// 每次抽奖都重新读取文件，确保是最新的名单
-//	names, _ := readNamesFromFile()
-//
-//	// 校验人数
-//	if len(names) < 2 {
-//		json.NewEncoder(w).Encode(DrawResponse{Error: "名单中不足2人，无法抽奖！"})
-//		return
-//	}
-//
-//	// --- 抽奖核心算法 ---
-//	// rand.Perm(N) 会生成一个 0 到 N-1 的随机乱序数组
-//	// 比如 len=5，Perm 可能生成 [3, 0, 4, 1, 2]
-//	perm := rand.Perm(len(names))
-//
-//	// 我们直接取乱序数组的前两个作为索引，去 names 里拿人
-//	winners := []string{
-//		names[perm[0]],
-//		names[perm[1]],
-//	}
-//
-//	// 返回中奖者
-//	json.NewEncoder(w).Encode(DrawResponse{Winners: winners})
-//}
+// drawHandler: 增强版抽奖逻辑
+func drawHandler(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	names, _ := readNamesFromFile()
+
+	// 1. 校验人数
+	if len(names) < 2 {
+		json.NewEncoder(w).Encode(DrawResponse{Error: "名单中不足2人，无法抽奖！"})
+		return
+	}
+
+	// --- 增强版抽奖核心算法 ---
+
+	// 我们需要抽取 2 个中奖者。
+	// 为了保证绝对随机且不重复，我们模拟从箱子里“拿出一个，扔掉，再拿下一个”的过程。
+
+	// 复制一份名单，以免修改原始切片顺序（虽然这里修改也没事，但在复杂系统中是好习惯）
+	candidates := make([]string, len(names))
+	copy(candidates, names)
+
+	var winners []string
+
+	// 循环 2 次，抽取 2 个人
+	for i := 0; i < 2; i++ {
+		// currentLen 是当前剩余的候选人数
+		currentLen := len(candidates)
+
+		// 生成一个 [0, currentLen) 范围内的真随机数
+		// crypto/rand 生成的是 *big.Int，需要转换
+		bigIdx, err := rand.Int(rand.Reader, big.NewInt(int64(currentLen)))
+		if err != nil {
+			// 极罕见情况：操作系统随机源出错
+			json.NewEncoder(w).Encode(DrawResponse{Error: "随机数生成器故障"})
+			return
+		}
+
+		// 拿到随机索引
+		idx := int(bigIdx.Int64())
+
+		// 1. 选中这个人，加入中奖名单
+		winners = append(winners, candidates[idx])
+
+		// 2. 从候选名单中移除这个人，防止被重复抽中
+		// 技巧：把选中的元素和切片最后一个元素“交换”，然后把切片长度减 1
+		// 这样不仅效率高（O(1)），而且避免了数组整体移动
+		candidates[idx] = candidates[currentLen-1]
+		candidates = candidates[:currentLen-1]
+	}
+
+	// 返回中奖者
+	log.Printf("抽取的获奖者是： %s\n", winners)
+	json.NewEncoder(w).Encode(DrawResponse{Winners: winners})
+}

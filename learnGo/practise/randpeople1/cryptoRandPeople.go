@@ -11,6 +11,7 @@ import (
 	"os"       // 用于操作操作系统文件（打开、检查文件）
 	"strings"  // 用于处理字符串（去空格、拼接）
 	"sync"     // 用于并发控制（互斥锁）
+	"time"
 )
 
 // --- 全局变量定义 ---
@@ -22,6 +23,43 @@ var mu sync.Mutex
 
 // dbFile 是我们要存储名字的文件名
 const dbFile = "names.txt"
+
+// 初始化候选人名单
+var defaultNames = []string{
+	"齐弘宇",
+	"齐宝树",
+	"江龙",
+	"李雪",
+	"刘晓茜",
+	"周成山",
+	"刘先觉",
+	"李岷轩",
+	"温嘉鑫",
+	"李亚洲",
+	"张钦",
+	"孟辰",
+	"李亚东",
+}
+
+// --- 新增结构体 ---
+
+// HistoryRecord 用于记录每一次抽奖的历史
+
+type HistoryRecord struct {
+	Time     string   `json:"time"`
+	Operator string   `json:"operator"`
+	Winners  []string `json:"winners,omitempty"`
+}
+
+// DrawRequest 专门用于接收抽奖请求（包含操作人名字）
+type DrawRequest struct {
+	Operator string `json:"operator"`
+}
+
+// --- 全局变量 ---
+
+// history 存储本次启动后的所有抽奖记录
+var history []HistoryRecord
 
 // --- 数据结构定义 (Model) ---
 
@@ -69,19 +107,25 @@ func main() {
 	http.HandleFunc("/api/add", addHandler)    // 新增一个名字
 	http.HandleFunc("/api/del", deleteHandler) // 删除一个名字
 	http.HandleFunc("/api/draw", drawHandler)  // 开始抽奖
+	http.HandleFunc("/api/history", historyHandler)
 
 	// 4. 打印启动日志
 	fmt.Println("🚀 抽奖系统后端已启动！")
 	fmt.Println("📂 数据存储文件:", dbFile)
-	fmt.Println("👉 请在浏览器访问: http://localhost:8080")
+	fmt.Println("👉 请在浏览器访问: http://localhost:8181")
 
 	// 5. 启动前检查文件
 	// 如果 names.txt 不存在，先创建一个空的，防止后面报错
-	checkFile()
+	//checkFile()
 
+	//初始化名单每次写入文件
+	if err := initData(); err != nil {
+		fmt.Printf("数据初始化失败，%v\n", err)
+		return
+	}
 	// 6. 启动 Web 服务器，监听 8080 端口
 	// 这一行代码会一直运行，直到你强制关闭程序
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	if err := http.ListenAndServe(":8181", nil); err != nil {
 		fmt.Printf("启动失败: %v\n", err)
 	}
 }
@@ -103,6 +147,12 @@ func checkFile() {
 		_, err := os.Create(dbFile)
 		checkErr(err)
 	}
+}
+
+// // 【新增/修改】初始化数据函数
+// // 每次启动时，都把 defaultNames 写入文件，覆盖之前的旧数据
+func initData() error {
+	return writeNamesToFile(defaultNames)
 }
 
 // readNamesFromFile 从 txt 文件中读取所有名字
@@ -251,6 +301,22 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 
 // drawHandler: 增强版抽奖逻辑
 func drawHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		return
+	}
+	// 1. 解析前端传来的“抽奖人”名字
+	var req DrawRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(DrawResponse{Error: "数据格式错误"})
+		log.Println("数据格式错误")
+		return
+	}
+	// 2. 校验：抽奖人必须填名字
+	if strings.TrimSpace(req.Operator) == "" {
+		json.NewEncoder(w).Encode(DrawResponse{Error: "请输入抽奖人姓名"})
+		return
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -299,8 +365,28 @@ func drawHandler(w http.ResponseWriter, r *http.Request) {
 		candidates[idx] = candidates[currentLen-1]
 		candidates = candidates[:currentLen-1]
 	}
+	// 4. 【关键】记录历史
+	record := HistoryRecord{
+		Time:     time.Now().Format("2006-01-02 15:04:05"),
+		Operator: req.Operator,
+		Winners:  winners,
+	}
 
+	history = append(history, record)
 	// 返回中奖者
 	log.Printf("抽取的获奖者是： %s\n", winners)
 	json.NewEncoder(w).Encode(DrawResponse{Winners: winners})
+}
+
+func historyHandler(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	// 直接返回内存里的 history 切片
+	// 为了防止前端处理 null，如果 history 是 nil，初始化为空切片
+	if history == nil {
+		history = make([]HistoryRecord, 0)
+	}
+
+	json.NewEncoder(w).Encode(history)
 }

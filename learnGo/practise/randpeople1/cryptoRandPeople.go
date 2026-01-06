@@ -7,6 +7,7 @@ import (
 	"fmt"           // 用于打印日志到控制台
 	"log"
 	"math/big" // 用于生成随机数
+	shuffle "math/rand/v2"
 	"net/http" // 用于搭建 Web 服务器
 	"os"       // 用于操作操作系统文件（打开、检查文件）
 	"strings"  // 用于处理字符串（去空格、拼接）
@@ -191,6 +192,15 @@ func writeNamesToFile(names []string) error {
 	return os.WriteFile(dbFile, []byte(content), 0666)
 }
 
+// 切片打乱函数
+func shuffleSlice[T any](slice []T, num int) { // 泛型说明：[T any] 支持任意类型切片（int/string/自定义结构体等）
+	for i := 0; i <= num; i++ {
+		shuffle.Shuffle(len(slice), func(i, j int) {
+			slice[i], slice[j] = slice[j], slice[i]
+		})
+	}
+}
+
 // --- 接口处理函数 (Handlers) ---
 
 // listHandler: 获取名单列表
@@ -337,12 +347,17 @@ func drawHandler(w http.ResponseWriter, r *http.Request) {
 	candidates := make([]string, len(names))
 	copy(candidates, names)
 
+	//打乱5次
+	shuffleSlice(candidates, 5)
+	fmt.Printf("打乱后的名单是：%v\n", candidates)
+
 	var winners []string
 
 	// 循环 2 次，抽取 2 个人
 	for i := 0; i < 2; i++ {
 		// currentLen 是当前剩余的候选人数
 		currentLen := len(candidates)
+		//fmt.Printf("抽两次人，第 %d 轮抽当前候选人数： %d\n", i, currentLen)
 
 		// 生成一个 [0, currentLen) 范围内的真随机数
 		// crypto/rand 生成的是 *big.Int，需要转换
@@ -367,7 +382,7 @@ func drawHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// 4. 【关键】记录历史
 	record := HistoryRecord{
-		Time:     time.Now().Format("2006-01-02 15:04:05"),
+		Time:     time.Now().Format("2006-01-02 15:04:05"), //固定格式展示日期
 		Operator: req.Operator,
 		Winners:  winners,
 	}

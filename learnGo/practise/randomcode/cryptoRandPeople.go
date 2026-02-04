@@ -1,4 +1,4 @@
-package main
+package randomcode
 
 import (
 	"bufio"         // 用于按行读取文件

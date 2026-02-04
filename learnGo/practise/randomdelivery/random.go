@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -101,12 +100,25 @@ func main() {
 func getDBPath() string {
 	// runtime.Caller(0) 获取当前调用函数的文件位置
 	// filename 就是这个 random.go 文件的完整绝对路径
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
+	//_, filename, _, ok := runtime.Caller(0)
+	//if !ok {
+	//	return dbFile
+	//}
+	//dir := filepath.Dir(filename)
+	//return filepath.Join(dir, "names.txt")
+
+	// 获取当前执行程序的绝对路径 (例如 /Users/.../randpeople1/battery)
+	exePath, err := os.Executable()
+	if err != nil {
+		// 极端情况获取失败，回退到相对路径
 		return dbFile
 	}
-	dir := filepath.Dir(filename)
-	return filepath.Join(dir, "names.txt")
+
+	// 获取目录 (例如 /Users/.../randpeople1)
+	dir := filepath.Dir(exePath)
+
+	// 拼接完整路径 (例如 /Users/.../randpeople1/names.txt)
+	return filepath.Join(dir, dbFile)
 }
 
 func initData() error {

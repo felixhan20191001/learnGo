@@ -21,6 +21,7 @@ import (
 var mu sync.Mutex
 
 const dbFile = "names.txt"
+const historyFile = "history.jsonl"
 
 var DrawNum = 0
 
@@ -43,8 +44,6 @@ type DrawRequest struct {
 	Count    int    `json:"count"`
 }
 
-var history []HistoryRecord
-
 type Response struct {
 	Success bool     `json:"success"`
 	Msg     string   `json:"msg"`
@@ -63,6 +62,8 @@ type ActionRequest struct {
 type BatchActionRequest struct {
 	Names []string `json:"names"`
 }
+
+var history []HistoryRecord
 
 // --- 主程序入口 ---
 
@@ -87,6 +88,14 @@ func main() {
 	if err := initData(); err != nil {
 		fmt.Printf("数据初始化失败，%v\n", err)
 		return
+	}
+
+	his, err := readHistoryFromFile()
+	if err != nil {
+		fmt.Printf("获取抽奖历史失败: %v\n", err)
+		history = make([]HistoryRecord, 0)
+	} else {
+		history = his
 	}
 
 	// 4. 启动服务
@@ -121,6 +130,30 @@ func getDBPath() string {
 	return filepath.Join(dir, dbFile)
 }
 
+func getHistoryPath() string {
+
+	//runtime.Caller(0) //获取当前调用函数的文件位置
+	////filename 就是这个 random.go 文件的完整绝对路径
+	//_, filename, _, ok := runtime.Caller(0)
+	//if !ok {
+	//	return historyFile
+	//}
+	//dir := filepath.Dir(filename)
+	//return filepath.Join(dir, historyFile)
+
+	exePath, err := os.Executable()
+	if err != nil {
+		// 极端情况获取失败，回退到相对路径
+		return historyFile
+	}
+
+	// 获取目录 (例如 /Users/.../randpeople1)
+	dir := filepath.Dir(exePath)
+
+	// 拼接完整路径 (例如 /Users/.../randpeople1/names.txt)
+	return filepath.Join(dir, historyFile)
+}
+
 func initData() error {
 	filePath := getDBPath()
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
@@ -148,6 +181,48 @@ func readNamesFromFile() ([]string, error) {
 		}
 	}
 	return names, nil
+}
+
+func readHistoryFromFile() ([]HistoryRecord, error) {
+	filePath := getHistoryPath()
+	file, err := os.OpenFile(filePath, os.O_RDONLY|os.O_CREATE, 0666)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var records []HistoryRecord
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		var record HistoryRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			continue
+		}
+		records = append(records, record)
+	}
+
+	return records, scanner.Err()
+}
+
+func addHistory(record HistoryRecord) error {
+	filePath := getHistoryPath()
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0666)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	_, err = file.WriteString(string(data) + "\n") //空白标识符不算新变量，err之前已经声明过，所有这一行不需要重新声明
+	return err
 }
 
 func clearFile() error {
@@ -305,8 +380,8 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func drawHandler(w http.ResponseWriter, r *http.Request) {
-	DrawNum = DrawNum + 1
-	fmt.Printf("累计抽奖次数: %v\n", DrawNum)
+	//DrawNum = DrawNum + 1
+	//fmt.Printf("累计抽奖次数: %v\n", DrawNum)
 	if r.Method != "POST" {
 		return
 	}
@@ -357,6 +432,9 @@ func drawHandler(w http.ResponseWriter, r *http.Request) {
 		Time:     time.Now().Format("2006-01-02 15:04:05"),
 		Operator: req.Operator,
 		Winners:  winners,
+	}
+	if err := addHistory(record); err != nil {
+		fmt.Printf("抽奖历史写入文件失败：%v", err)
 	}
 	history = append(history, record)
 	json.NewEncoder(w).Encode(DrawResponse{Winners: winners})

@@ -108,7 +108,7 @@ func main() {
 
 func getDBPath() string {
 	// runtime.Caller(0) 获取当前调用函数的文件位置
-	// filename 就是这个 random.go 文件的完整绝对路径
+	// filename 就是这个 randombyweight.go 文件的完整绝对路径
 	//_, filename, _, ok := runtime.Caller(0)
 	//if !ok {
 	//	return dbFile
@@ -133,7 +133,7 @@ func getDBPath() string {
 func getHistoryPath() string {
 
 	//runtime.Caller(0) //获取当前调用函数的文件位置
-	////filename 就是这个 random.go 文件的完整绝对路径
+	////filename 就是这个 randombyweight.go 文件的完整绝对路径
 	//_, filename, _, ok := runtime.Caller(0)
 	//if !ok {
 	//	return historyFile

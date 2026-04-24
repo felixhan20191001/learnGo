@@ -3,28 +3,31 @@ package main
 import (
 	"bufio"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
-	"github.com/gin-gonic/gin"
 	"math/big"
 	shuffle "math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // --- 全局变量定义 ---
 var mu sync.Mutex
 
 const dbFile = "names.txt"
+const historyFile = "history.jsonl"
+const maxHistoryNum = 100
 
 var DrawNum = 0
 
-// 默认名单（当文件不存在时使用）
+// 默认名单
 var defaultNames = []string{
 	"齐弘宇", "齐宝树", "江龙", "李雪", "刘晓茜", "周成山", "刘先觉",
 	"李岷轩", "温嘉鑫", "李亚洲", "张钦", "孟辰", "李亚东",
@@ -40,7 +43,7 @@ type HistoryRecord struct {
 
 type DrawRequest struct {
 	Operator string `json:"operator"`
-	Count    int    `json:"count"`
+	Count    int    `json:"count"` // 支持抽奖人数
 }
 
 var history []HistoryRecord
@@ -67,62 +70,79 @@ type BatchActionRequest struct {
 // --- 主程序入口 ---
 
 func main() {
-	// 1. 静态资源服务
-	r := gin.Default()
-	r.NoRoute(gin.WrapH(http.FileServer(http.Dir("."))))
-
-	// 2. 注册 API 路由 (请确保这里都有)
-	api := r.Group("/api")
-	{
-		api.GET("/list", listHandler)
-		api.GET("/history", historyHandler)
-		api.POST("/add", addHandler)
-		api.POST("/draw", drawHandler)
-		api.POST("/delete", deleteHandler)
-		api.POST("/batch_add", batchAddHandler)
-		api.POST("/clear", clearHandler)
-	}
-
-	fmt.Println("🚀 抽奖系统后端已启动！")
-	fmt.Println("📂 数据存储文件:", getDBPath())
-	fmt.Println("👉 请在浏览器访问: http://localhost:8181")
-
-	// 3. 初始化数据
+	// 初始化数据
 	if err := initData(); err != nil {
 		fmt.Printf("数据初始化失败，%v\n", err)
 		return
 	}
 
-	// 4. 启动服务
+	his, err := readHistoryFromFile()
+	if err != nil {
+		fmt.Printf("从jsonl中获取历史结果失败%v\n", err)
+		history = make([]HistoryRecord, 0)
+	} else {
+		history = his
+	}
+
+	// 设置 Gin 模式 (ReleaseMode 可以隐藏调试日志)
+	// gin.SetMode(gin.ReleaseMode)
+
+	r := gin.Default()
+
+	// 1. API 路由组
+	api := r.Group("/api")
+	{
+		api.GET("/list", listHandler)
+		api.POST("/add", addHandler)
+		api.POST("/del", deleteHandler)
+		api.POST("/draw", drawHandler)
+		api.GET("/history", historyHandler)
+		api.POST("/batch_add", batchAddHandler)
+		api.POST("/clear", clearHandler)
+	}
+
+	// 2. 静态资源服务 (模拟 http.FileServer(http.Dir("./")))
+	// 使用 NoRoute 可以匹配所有未被 API 捕获的路径，比如 /, /index.html, /image_0.jpg
+	r.NoRoute(gin.WrapH(http.FileServer(http.Dir("."))))
+
+	fmt.Println("🚀 抽奖系统后端已启动 (Gin版)！")
+	fmt.Println("📂 数据存储文件:", getDBPath())
+	fmt.Println("👉 请在浏览器访问: http://localhost:8181")
+
+	// 3. 启动服务
 	if err := r.Run(":8181"); err != nil {
-		fmt.Printf("启动失败： %v\n", err)
+		fmt.Printf("启动失败: %v\n", err)
 	}
 }
 
 // --- 工具函数 ---
 
+// 获取可执行文件所在的目录
+func getExecDir() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	return filepath.Dir(exePath)
+}
+
+// getDBPath 获取 names.txt 的绝对路径
 func getDBPath() string {
-	// runtime.Caller(0) 获取当前调用函数的文件位置
-	// filename 就是这个 randombyweight.go 文件的完整绝对路径
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
+	exePath, err := os.Executable()
+	if err != nil {
 		return dbFile
 	}
-	dir := filepath.Dir(filename)
-	return filepath.Join(dir, "names.txt")
+	dir := filepath.Dir(exePath)
+	return filepath.Join(dir, dbFile)
+}
 
-	// 获取当前执行程序的绝对路径 (例如 /Users/.../randpeople1/battery)
-	//exePath, err := os.Executable()
-	//if err != nil {
-	//	// 极端情况获取失败，回退到相对路径
-	//	return dbFile
-	//}
-
-	// 获取目录 (例如 /Users/.../randpeople1)
-	//dir := filepath.Dir(exePath)
-	//
-	//// 拼接完整路径 (例如 /Users/.../randpeople1/names.txt)
-	//return filepath.Join(dir, dbFile)
+func getHistoryPath() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		return historyFile
+	}
+	dir := filepath.Dir(exePath)
+	return filepath.Join(dir, historyFile)
 }
 
 func initData() error {
@@ -135,14 +155,12 @@ func initData() error {
 
 func readNamesFromFile() ([]string, error) {
 	filePath := getDBPath()
-	//fmt.Println(filePath)
 	file, err := os.OpenFile(filePath, os.O_RDONLY|os.O_CREATE, 0666)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	// 初始化为空切片而不是 nil，防止 JSON 序列化为 null
 	names := make([]string, 0)
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -157,8 +175,55 @@ func readNamesFromFile() ([]string, error) {
 func writeNamesToFile(names []string) error {
 	content := strings.Join(names, "\n")
 	filePath := getDBPath()
-	//fmt.Println(filePath)
 	return os.WriteFile(filePath, []byte(content), 0666)
+}
+
+func readHistoryFromFile() ([]HistoryRecord, error) {
+	filePath := getHistoryPath()
+	file, err := os.OpenFile(filePath, os.O_RDONLY|os.O_CREATE, 0666)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	history := make([]HistoryRecord, 0)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var record HistoryRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			continue
+		}
+		history = appendRollingHistory(history, record)
+	}
+	return history, scanner.Err()
+}
+
+func addHistoryToJsonl(result HistoryRecord) error {
+	filepath := getHistoryPath()
+	file, err := os.OpenFile(filepath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0666)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	_, err = file.WriteString(string(data) + "\n")
+	return err
+}
+
+func appendRollingHistory(records []HistoryRecord, record HistoryRecord) []HistoryRecord {
+	if len(records) < maxHistoryNum {
+		return append(records, record)
+	}
+	copy(records, records[1:])
+	records[len(records)-1] = record
+	return records
 }
 
 func shuffleSlice[T any](slice []T, num int) {
@@ -169,7 +234,7 @@ func shuffleSlice[T any](slice []T, num int) {
 	}
 }
 
-// --- 接口处理函数 ---
+// --- Gin 接口处理函数 ---
 
 func listHandler(c *gin.Context) {
 	mu.Lock()
@@ -180,11 +245,13 @@ func listHandler(c *gin.Context) {
 
 func addHandler(c *gin.Context) {
 	var req ActionRequest
+	// ShouldBindJSON 自动解析 JSON
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, Response{Success: false, Msg: "参数错误"})
 		return
 	}
 
+	//移除字符串首尾的所有空白字符
 	newName := strings.TrimSpace(req.Name)
 	if newName == "" {
 		c.JSON(http.StatusOK, Response{Success: false, Msg: "名字不能为空"})
@@ -213,7 +280,7 @@ func addHandler(c *gin.Context) {
 func batchAddHandler(c *gin.Context) {
 	var req BatchActionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{Success: true, Msg: "数据格式错误"})
+		c.JSON(http.StatusBadRequest, Response{Success: false, Msg: "数据格式错误"})
 		return
 	}
 
@@ -225,39 +292,49 @@ func batchAddHandler(c *gin.Context) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	re := regexp.MustCompile(`^\d+(\.|、)?\s*`)
+	// 重新读取当前文件内容，避免覆盖（如果你想保留旧数据）
+	// 或者如果你想完全覆盖，就保持你原来的逻辑。
+	// 这里保留你原来的逻辑：先清空，再正则处理，再写入。
+	// 但通常批量添加是 append，这里按你原代码逻辑可能是覆盖或添加。
+	// 原代码：读取 req.Names -> 去重/格式化 -> 写入。
+	// 原代码逻辑似乎是：clearFile() 然后写入。我们保持一致。
 
-	currentNames := make([]string, 0)
+	// 注意：你原来的 batchAddHandler 里面调用了 clearFile()，这意味着是“覆盖导入”。
+	// 如果你想改为“追加导入”，请去掉 clearFile 并读取 currentNames := readNamesFromFile()
+
+	// 这里复刻原代码逻辑：全量替换
+	re := regexp.MustCompile(`^\d+(\.|、)?\s*`)
+	newNames := make([]string, 0)
+
+	// 如果是追加模式，先读旧的
+	// currentNames, _ := readNamesFromFile()
+	// newNames = append(newNames, currentNames...)
+
 	for _, rawName := range req.Names {
 		name := strings.TrimSpace(rawName)
 		name = re.ReplaceAllString(name, "")
 		name = strings.TrimSpace(name)
 		if name != "" {
-			currentNames = append(currentNames, name)
+			newNames = append(newNames, name)
 		}
 	}
-	if err := writeNamesToFile(currentNames); err != nil {
+
+	if err := writeNamesToFile(newNames); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Success: false, Msg: "写入文件失败"})
 		return
 	}
-	c.JSON(http.StatusOK, Response{Success: true, Names: currentNames, Msg: "写入文件成功"})
+	c.JSON(http.StatusOK, Response{Success: true, Names: newNames, Msg: "写入文件成功"})
 }
 
-// 【清空功能】
 func clearHandler(c *gin.Context) {
-
 	mu.Lock()
 	defer mu.Unlock()
 
-	// 创建一个空切片
 	emptyNames := make([]string, 0)
-
-	// 写入文件（覆盖现有内容）
 	if err := writeNamesToFile(emptyNames); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Success: false, Msg: "清空文件失败"})
 		return
 	}
-
 	c.JSON(http.StatusOK, Response{Success: true, Names: emptyNames, Msg: "名单已全部清空"})
 }
 
@@ -293,8 +370,12 @@ func deleteHandler(c *gin.Context) {
 }
 
 func drawHandler(c *gin.Context) {
-	//DrawNum = DrawNum + 1
+	mu.Lock()
+	defer mu.Unlock()
+
+	//DrawNum++
 	//fmt.Printf("累计抽奖次数: %v\n", DrawNum)
+
 	var req DrawRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, DrawResponse{Error: "数据格式错误"})
@@ -305,18 +386,16 @@ func drawHandler(c *gin.Context) {
 		return
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
 	names, _ := readNamesFromFile()
 
-	drawCount := req.Count
-	if drawCount <= 0 {
-		drawCount = 2
+	// 处理抽奖数量，默认为 2
+	count := req.Count
+	if count <= 0 {
+		count = 2
 	}
 
-	if len(names) < drawCount {
-		Msg := fmt.Sprintf("名单中不足 %d 人，无法抽奖！", drawCount)
-		c.JSON(http.StatusOK, DrawResponse{Error: Msg})
+	if len(names) < count {
+		c.JSON(http.StatusOK, DrawResponse{Error: fmt.Sprintf("名单中不足%d人，无法抽奖！", count)})
 		return
 	}
 
@@ -325,7 +404,7 @@ func drawHandler(c *gin.Context) {
 	shuffleSlice(candidates, 5)
 
 	var winners []string
-	for i := 0; i < drawCount; i++ {
+	for i := 0; i < count; i++ {
 		currentLen := len(candidates)
 		bigIdx, err := rand.Int(rand.Reader, big.NewInt(int64(currentLen)))
 		if err != nil {
@@ -343,7 +422,10 @@ func drawHandler(c *gin.Context) {
 		Operator: req.Operator,
 		Winners:  winners,
 	}
-	history = append(history, record)
+	history = appendRollingHistory(history, record)
+	if err := addHistoryToJsonl(record); err != nil {
+		fmt.Printf("抽奖结果写入文件失败：%v", err)
+	}
 	c.JSON(http.StatusOK, DrawResponse{Winners: winners})
 }
 

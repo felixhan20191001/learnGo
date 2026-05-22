@@ -164,7 +164,7 @@ func readNamesFromFile() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// defer 关键字确保函数结束前关闭文件，释放资源
+	// learn_defer 关键字确保函数结束前关闭文件，释放资源
 	defer file.Close()
 
 	var names []string

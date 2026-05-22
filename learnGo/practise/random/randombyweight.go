@@ -1,15 +1,8 @@
 package main
 
 import (
-	"bufio"
-	"crypto/rand"
-	"encoding/json"
 	"fmt"
-	"math/big"
-	shuffle "math/rand/v2"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -115,131 +108,22 @@ func main() {
 	}
 }
 
-// --- 工具函数 ---
-
-// 获取可执行文件所在的目录
-func getExecDir() string {
-	exePath, err := os.Executable()
-	if err != nil {
-		return "."
-	}
-	return filepath.Dir(exePath)
-}
-
-// getDBPath 获取 names.txt 的绝对路径
-func getDBPath() string {
-	exePath, err := os.Executable()
-	if err != nil {
-		return dbFile
-	}
-	dir := filepath.Dir(exePath)
-	return filepath.Join(dir, dbFile)
-}
-
-func getHistoryPath() string {
-	exePath, err := os.Executable()
-	if err != nil {
-		return historyFile
-	}
-	dir := filepath.Dir(exePath)
-	return filepath.Join(dir, historyFile)
-}
-
-func initData() error {
-	filePath := getDBPath()
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return writeNamesToFile(defaultNames)
-	}
-	return nil
-}
-
-func readNamesFromFile() ([]string, error) {
-	filePath := getDBPath()
-	file, err := os.OpenFile(filePath, os.O_RDONLY|os.O_CREATE, 0666)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	names := make([]string, 0)
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" {
-			names = append(names, line)
-		}
-	}
-	return names, nil
-}
-
-func writeNamesToFile(names []string) error {
-	content := strings.Join(names, "\n")
-	filePath := getDBPath()
-	return os.WriteFile(filePath, []byte(content), 0666)
-}
-
-func readHistoryFromFile() ([]HistoryRecord, error) {
-	filePath := getHistoryPath()
-	file, err := os.OpenFile(filePath, os.O_RDONLY|os.O_CREATE, 0666)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	history := make([]HistoryRecord, 0)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var record HistoryRecord
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			continue
-		}
-		history = appendRollingHistory(history, record)
-	}
-	return history, scanner.Err()
-}
-
-func addHistoryToJsonl(result HistoryRecord) error {
-	filepath := getHistoryPath()
-	file, err := os.OpenFile(filepath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0666)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	data, err := json.Marshal(result)
-	if err != nil {
-		return err
-	}
-	_, err = file.WriteString(string(data) + "\n")
-	return err
-}
-
-func appendRollingHistory(records []HistoryRecord, record HistoryRecord) []HistoryRecord {
-	if len(records) < maxHistoryNum {
-		return append(records, record)
-	}
-	copy(records, records[1:])
-	records[len(records)-1] = record
-	return records
-}
-
-func shuffleSlice[T any](slice []T, num int) {
-	for i := 0; i <= num; i++ {
-		shuffle.Shuffle(len(slice), func(i, j int) {
-			slice[i], slice[j] = slice[j], slice[i]
-		})
-	}
-}
-
 // --- Gin 接口处理函数 ---
 
 func listHandler(c *gin.Context) {
 	mu.Lock()
 	defer mu.Unlock()
-	names, _ := readNamesFromFile()
+
+	persons, err := getPerson()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Success: false, Msg: "读取文件失败"})
+		return
+	}
+
+	names := make([]string, 0, len(persons))
+	for _, person := range persons {
+		names = append(names, person.Name)
+	}
 	c.JSON(http.StatusOK, Response{Success: true, Names: names})
 }
 
@@ -261,18 +145,27 @@ func addHandler(c *gin.Context) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	names, _ := readNamesFromFile()
-	for _, n := range names {
-		if n == newName {
+	persons, _ := getPerson()
+	for _, n := range persons {
+		if n.Name == newName {
 			c.JSON(http.StatusOK, Response{Success: false, Msg: "名字已存在"})
 			return
 		}
 	}
 
-	names = append(names, newName)
-	if err := writeNamesToFile(names); err != nil {
+	newPerson := Person{
+		Name:       newName,
+		BaseWeight: defaultWeight,
+	}
+	persons = append(persons, newPerson)
+	if err := writePersons(persons); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Success: false, Msg: "写入文件失败"})
 		return
+	}
+
+	names := make([]string, 0, len(persons))
+	for _, person := range persons {
+		names = append(names, person.Name)
 	}
 	c.JSON(http.StatusOK, Response{Success: true, Names: names})
 }
@@ -292,19 +185,21 @@ func batchAddHandler(c *gin.Context) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// 重新读取当前文件内容，避免覆盖（如果你想保留旧数据）
-	// 或者如果你想完全覆盖，就保持你原来的逻辑。
-	// 这里保留你原来的逻辑：先清空，再正则处理，再写入。
-	// 但通常批量添加是 append，这里按你原代码逻辑可能是覆盖或添加。
-	// 原代码：读取 req.Names -> 去重/格式化 -> 写入。
-	// 原代码逻辑似乎是：clearFile() 然后写入。我们保持一致。
-
-	// 注意：你原来的 batchAddHandler 里面调用了 clearFile()，这意味着是“覆盖导入”。
-	// 如果你想改为“追加导入”，请去掉 clearFile 并读取 currentNames := readNamesFromFile()
+	oldPersons, err := getPerson()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Success: false, Msg: "读取名单失败"})
+		return
+	}
+	oldWeights := make(map[string]int, len(oldPersons))
+	for _, person := range oldPersons {
+		oldWeights[person.Name] = person.BaseWeight
+	}
 
 	// 这里复刻原代码逻辑：全量替换
 	re := regexp.MustCompile(`^\d+(\.|、)?\s*`)
 	newNames := make([]string, 0)
+	newPersons := make([]Person, 0)
+	seen := make(map[string]bool)
 
 	// 如果是追加模式，先读旧的
 	// currentNames, _ := readNamesFromFile()
@@ -314,15 +209,26 @@ func batchAddHandler(c *gin.Context) {
 		name := strings.TrimSpace(rawName)
 		name = re.ReplaceAllString(name, "")
 		name = strings.TrimSpace(name)
-		if name != "" {
-			newNames = append(newNames, name)
+		if name == "" || seen[name] {
+			continue
 		}
+		baseWeight := defaultWeight
+		if oldWeight, ok := oldWeights[name]; ok {
+			baseWeight = oldWeight
+		}
+		newPersons = append(newPersons, Person{
+			Name:       name,
+			BaseWeight: baseWeight,
+		})
+		newNames = append(newNames, name)
+		seen[name] = true
 	}
 
-	if err := writeNamesToFile(newNames); err != nil {
+	if err := writePersons(newPersons); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Success: false, Msg: "写入文件失败"})
 		return
 	}
+	_ = writeNamesToFile(newNames)
 	c.JSON(http.StatusOK, Response{Success: true, Names: newNames, Msg: "写入文件成功"})
 }
 
@@ -330,12 +236,14 @@ func clearHandler(c *gin.Context) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	emptyNames := make([]string, 0)
-	if err := writeNamesToFile(emptyNames); err != nil {
+	emptyNames := make([]Person, 0)
+	if err := writePersons(emptyNames); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Success: false, Msg: "清空文件失败"})
 		return
 	}
-	c.JSON(http.StatusOK, Response{Success: true, Names: emptyNames, Msg: "名单已全部清空"})
+
+	_ = writeNamesToFile([]string{}) //顺便清空names.txt
+	c.JSON(http.StatusOK, Response{Success: true, Names: []string{}, Msg: "名单已全部清空"})
 }
 
 func deleteHandler(c *gin.Context) {
@@ -348,12 +256,19 @@ func deleteHandler(c *gin.Context) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	names, _ := readNamesFromFile()
-	newNames := make([]string, 0)
+
+	persons, err := getPerson()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Success: false, Msg: "读取名单失败"})
+		return
+	}
+	newPersons := make([]Person, 0, len(persons))
+	newNames := make([]string, 0, len(persons))
 	found := false
-	for _, n := range names {
-		if n != target {
-			newNames = append(newNames, n)
+	for _, person := range persons {
+		if person.Name != target {
+			newNames = append(newNames, person.Name)
+			newPersons = append(newPersons, person)
 		} else {
 			found = true
 		}
@@ -362,10 +277,11 @@ func deleteHandler(c *gin.Context) {
 		c.JSON(http.StatusOK, Response{Success: false, Msg: "未找到该名字"})
 		return
 	}
-	if err := writeNamesToFile(newNames); err != nil {
+	if err := writePersons(newPersons); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{Success: false, Msg: "保存文件失败"})
 		return
 	}
+	_ = writeNamesToFile(newNames)
 	c.JSON(http.StatusOK, Response{Success: true, Names: newNames})
 }
 
@@ -386,7 +302,8 @@ func drawHandler(c *gin.Context) {
 		return
 	}
 
-	names, _ := readNamesFromFile()
+	var weightedPersons []WeightedPerson
+	weightedPersons = calFinalWeight()
 
 	// 处理抽奖数量，默认为 2
 	count := req.Count
@@ -394,28 +311,12 @@ func drawHandler(c *gin.Context) {
 		count = 2
 	}
 
-	if len(names) < count {
+	if len(weightedPersons) < count {
 		c.JSON(http.StatusOK, DrawResponse{Error: fmt.Sprintf("名单中不足%d人，无法抽奖！", count)})
 		return
 	}
 
-	candidates := make([]string, len(names))
-	copy(candidates, names)
-	shuffleSlice(candidates, 5)
-
 	var winners []string
-	for i := 0; i < count; i++ {
-		currentLen := len(candidates)
-		bigIdx, err := rand.Int(rand.Reader, big.NewInt(int64(currentLen)))
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, DrawResponse{Error: "随机数生成器故障"})
-			return
-		}
-		idx := int(bigIdx.Int64())
-		winners = append(winners, candidates[idx])
-		candidates[idx] = candidates[currentLen-1]
-		candidates = candidates[:currentLen-1]
-	}
 
 	record := HistoryRecord{
 		Time:     time.Now().Format("2006-01-02 15:04:05"),

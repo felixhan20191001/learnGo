@@ -145,7 +145,11 @@ func addHandler(c *gin.Context) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	persons, _ := getPerson()
+	persons, err := getPerson()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Success: false, Msg: "读取名单失败"})
+		return
+	}
 	for _, n := range persons {
 		if n.Name == newName {
 			c.JSON(http.StatusOK, Response{Success: false, Msg: "名字已存在"})
@@ -289,8 +293,8 @@ func drawHandler(c *gin.Context) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	//DrawNum++
-	//fmt.Printf("累计抽奖次数: %v\n", DrawNum)
+	DrawNum++
+	fmt.Printf("累计抽奖次数: %v\n", DrawNum)
 
 	var req DrawRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -304,6 +308,8 @@ func drawHandler(c *gin.Context) {
 
 	var weightedPersons []WeightedPerson
 	weightedPersons = calFinalWeight()
+	candidates := make([]WeightedPerson, len(weightedPersons))
+	copy(candidates, weightedPersons)
 
 	// 处理抽奖数量，默认为 2
 	count := req.Count
@@ -311,12 +317,21 @@ func drawHandler(c *gin.Context) {
 		count = 2
 	}
 
-	if len(weightedPersons) < count {
+	if len(candidates) < count {
 		c.JSON(http.StatusOK, DrawResponse{Error: fmt.Sprintf("名单中不足%d人，无法抽奖！", count)})
 		return
 	}
 
 	var winners []string
+	for i := 0; i < count; i++ {
+		index, err := drawOneByWeight(candidates)
+		if err != nil {
+			c.JSON(http.StatusOK, DrawResponse{Error: "抽奖失败"})
+			return
+		}
+		winners = append(winners, candidates[index].Name)
+		candidates = append(candidates[:index], candidates[index+1:]...) //从候选人切片里删除已经中奖的那个人
+	}
 
 	record := HistoryRecord{
 		Time:     time.Now().Format("2006-01-02 15:04:05"),

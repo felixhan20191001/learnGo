@@ -1,10 +1,12 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"math"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
@@ -230,4 +232,36 @@ func calFinalWeight() []WeightedPerson {
 	})
 
 	return wp
+}
+
+func drawOneByWeight(candidates []WeightedPerson) (int, error) {
+	totalWeight := 0
+	for _, candidate := range candidates {
+		if candidate.CurrentWeight > 0 {
+			totalWeight += candidate.CurrentWeight
+		}
+	}
+	if totalWeight <= 0 {
+		return -1, fmt.Errorf("候选人权重无效")
+	}
+
+	randomNum, err := rand.Int(rand.Reader, big.NewInt(int64(totalWeight)))
+	if err != nil {
+		return -1, err
+	}
+
+	target := int(randomNum.Int64()) + 1
+	num := 0
+	for i, candidate := range candidates {
+		if candidate.CurrentWeight <= 0 {
+			continue
+		}
+		num += candidate.CurrentWeight
+		if num >= target {
+			return i, nil
+		}
+	}
+
+	return -1, fmt.Errorf("没有抽中")
+
 }

@@ -35,7 +35,7 @@ type WeightedPerson struct {
 
 var defaultConfig = LotteryConfig{
 	TimeWindow: 7,
-	HitTimes:   2,
+	HitTimes:   0,
 	ReduceRate: 0.5,
 	MinWeight:  10,
 }
